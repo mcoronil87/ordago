@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Órdago · diagnóstico</title>
+<script src="config.js?v=2"></script>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0E1A2B;color:#EAF1FA;
+    margin:0;padding:24px 18px 60px;line-height:1.5}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:#8AA0BE;font-size:14px;margin-bottom:22px}
+  .t{border:1px solid #21374F;border-radius:12px;padding:14px;margin-bottom:12px;background:#132038}
+  .t h2{font-size:15px;margin:0 0 8px;display:flex;align-items:center;gap:8px}
+  .badge{font-size:12px;padding:3px 8px;border-radius:99px;font-weight:700}
+  .ok{background:#1C3A12;color:#9FD13F}
+  .ko{background:#3A1220;color:#E8718F}
+  .wait{background:#2A2F3A;color:#8AA0BE}
+  pre{white-space:pre-wrap;word-break:break-word;background:#0B1524;border-radius:8px;padding:10px;
+    font-size:12px;color:#B6C7DC;margin:8px 0 0;overflow-x:auto}
+  .fix{background:#2A1F0B;border:1px solid #6B5312;border-radius:10px;padding:12px;margin-top:14px;
+    font-size:14px;color:#F2C783;display:none}
+  .fix.on{display:block}
+  code{background:#0B1524;padding:1px 5px;border-radius:4px;font-size:13px}
+  button{background:#EAF1FA;color:#0E1A2B;border:none;border-radius:10px;padding:13px 18px;
+    font-size:15px;font-weight:600;width:100%;margin-top:16px}
+</style>
+</head>
+<body>
+<h1>Diagnóstico de Órdago</h1>
+<div class="sub">Comprueba la conexión con Supabase paso a paso.</div>
+
+<div class="t" id="t0"><h2>1. Configuración <span class="badge wait">…</span></h2><pre>esperando</pre></div>
+<div class="t" id="t1"><h2>2. Leer la tabla <span class="badge wait">…</span></h2><pre>esperando</pre></div>
+<div class="t" id="t2"><h2>3. Escribir una fila <span class="badge wait">…</span></h2><pre>esperando</pre></div>
+<div class="t" id="t3"><h2>4. Volver a leerla <span class="badge wait">…</span></h2><pre>esperando</pre></div>
+<div class="t" id="t4"><h2>5. Borrarla <span class="badge wait">…</span></h2><pre>esperando</pre></div>
+
+<div class="fix" id="fix"></div>
+<button onclick="location.reload()">Repetir la prueba</button>
+
+<script>
+(function(){
+  var C = window.DUELO_CONFIG || {};
+  var URL = (C.supabaseUrl||"").replace(/\/+$/,"");
+  var KEY = C.supabaseKey||"";
+  var TABLA = C.tabla||"documentos";
+  var H = {apikey:KEY, Authorization:"Bearer "+KEY, "Content-Type":"application/json"};
+
+  function pinta(id, ok, texto){
+    var caja = document.getElementById(id);
+    var b = caja.querySelector(".badge");
+    b.className = "badge " + (ok?"ok":"ko");
+    b.textContent = ok?"correcto":"falla";
+    caja.querySelector("pre").textContent = texto;
+  }
+  function consejo(html){
+    var f=document.getElementById("fix");
+    f.className="fix on";
+    f.innerHTML=html;
+  }
+
+  if(!URL || !KEY){
+    pinta("t0", false, "Falta la URL o la clave en config.js.\nURL: "+(URL||"(vacía)")+"\nClave: "+(KEY?"puesta":"(vacía)"));
+    consejo("El archivo <code>config.js</code> no tiene los valores. Comprueba que subiste el correcto y que se llama exactamente <code>config.js</code>.");
+    return;
+  }
+  pinta("t0", true, "URL: "+URL+"\nClave: "+KEY.slice(0,22)+"…\nTabla: "+TABLA);
+
+  function paso(id, opciones){
+    return fetch(URL+"/rest/v1/"+opciones.ruta, {
+      method: opciones.method||"GET",
+      headers: Object.assign({}, H, opciones.headers||{}),
+      body: opciones.body?JSON.stringify(opciones.body):undefined
+    }).then(function(r){
+      return r.text().then(function(t){
+        var ok = r.ok;
+        pinta(id, ok, "HTTP "+r.status+" "+r.statusText+"\n"+(t||"(sin contenido)"));
+        return {ok:ok, status:r.status, texto:t};
+      });
+    }).catch(function(e){
+      pinta(id, false, "No se pudo conectar: "+e.message);
+      return {ok:false, status:0, texto:e.message};
+    });
+  }
+
+  var fila = {coll:"_diagnostico", id:"prueba", data:{cuando:new Date().toISOString()}};
+
+  paso("t1", {ruta: TABLA+"?select=coll,id&limit=3"}).then(function(r1){
+    if(!r1.ok){
+      if(r1.status===404) consejo("La tabla <code>"+TABLA+"</code> no existe. Ejecuta el contenido de <code>schema.sql</code> en Supabase → SQL Editor.");
+      else if(r1.status===401||r1.status===403) consejo("La clave no tiene permiso de lectura. Revisa que sea la clave <b>publicable</b> y que ejecutaste las políticas del <code>schema.sql</code>.");
+      else consejo("Error inesperado al leer. Copia el texto de arriba y pásamelo.");
+      return;
+    }
+    return paso("t2", {ruta: TABLA, method:"POST",
+      headers:{Prefer:"resolution=merge-duplicates,return=minimal"}, body:[fila]}).then(function(r2){
+      if(!r2.ok){
+        if(r2.status===401||r2.status===403)
+          consejo("Se puede leer pero <b>no escribir</b>: faltan las políticas de escritura. En Supabase → SQL Editor, ejecuta otra vez el <code>schema.sql</code> entero, sobre todo la parte de <code>create policy</code>.");
+        else if(r2.status===400)
+          consejo("La tabla existe pero sus columnas no son las esperadas. Debe tener <code>coll</code>, <code>id</code>, <code>data</code> y <code>actualizado</code>. Bórrala y vuelve a ejecutar el <code>schema.sql</code>.");
+        else consejo("Error inesperado al escribir. Copia el texto de arriba y pásamelo.");
+        return;
+      }
+      return paso("t3", {ruta: TABLA+"?coll=eq._diagnostico&select=data"}).then(function(){
+        return paso("t4", {ruta: TABLA+"?coll=eq._diagnostico", method:"DELETE"}).then(function(r4){
+          if(r4.ok) consejo("<b>Todo correcto.</b> La cuadrilla debería poder crearse sin problemas. Vuelve a <code>index.html</code> e inténtalo.");
+        });
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>
